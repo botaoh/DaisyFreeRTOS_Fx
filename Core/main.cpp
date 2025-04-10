@@ -1,60 +1,41 @@
 #include "daisy_seed.h"
-#include "daisysp.h"
-#include "DelayReverb.hpp"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "FreeRTOSConfig.h"  // Ensure this is in your include path
 
 using namespace daisy;
-using namespace daisysp;
+DaisySeed hw; // Check namespace; if defined as daisy::seed::DaisySeed, adjust accordingly
 
-// Global hardware and effect objects
-DaisySeed hw;
-DelayReverbFX fx;
+extern uint32_t SystemCoreClock; // Provided by system_stm32h7xx.c
 
-// Audio callback for processing input -> output
-void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, size_t size)
-{
-    for (size_t i = 0; i < size; i++)
-    {
-        float dry = in[0][i];
-        float wet = fx.Process(dry);
-        out[0][i] = out[1][i] = wet;
+// Simple LED blink task
+void BlinkTask(void* pvParameters) {
+    bool led_state = false;
+    while(1) {
+        led_state = !led_state;
+        hw.SetLed(led_state);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
-// FreeRTOS task to start audio
-void AudioTask(void* pvParameters)
-{
-    // Initialize FX
-    fx.Init(hw.AudioSampleRate());
-
-    // Start audio with callback
-    hw.StartAudio(AudioCallback);
-
-    // Main task loop does nothing – audio runs in interrupt
-    while (1)
-    {
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Optional: Sleep 1s per loop
-    }
-}
 
 int main(void)
 {
-    // Init hardware (clocks, peripherals, etc.)
     hw.Configure();
     hw.Init();
 
-    // Create the FreeRTOS task
-    xTaskCreate(AudioTask,        // Task function
-                "Audio",          // Name
-                512,              // Stack size (words, not bytes)
-                nullptr,          // Parameters
-                tskIDLE_PRIORITY + 1, // Priority
-                nullptr);         // Task handle
+    // Configure SysTick using the system clock and tick rate from FreeRTOSConfig.h
+    if (SysTick_Config(SystemCoreClock / configTICK_RATE_HZ)) {
+        while (1) {} // SysTick configuration error: halt
+    }
 
-    // Start FreeRTOS scheduler
+    BaseType_t ret = xTaskCreate(BlinkTask, "Blink", 256, nullptr, tskIDLE_PRIORITY, nullptr);
+    if (ret != pdPASS) {
+        while (1) {} // Task creation failed
+    }
+
     vTaskStartScheduler();
 
-    // Should never reach here
+    // If scheduler returns, something went wrong.
     while (1) {}
 }

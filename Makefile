@@ -9,22 +9,25 @@ FREERTOS_DIR = Middlewares/Third_Party/FreeRTOS
 BUILD_DIR = build
 SRC_DIR = Core
 
-# Source Files
-APP_SRC = \
-	$(SRC_DIR)/main.cpp \
-	$(SRC_DIR)/DelayReverb.cpp \
-	$(FREERTOS_DIR)/croutine.c \
-	$(FREERTOS_DIR)/event_groups.c \
-	$(FREERTOS_DIR)/list.c \
-	$(FREERTOS_DIR)/queue.c \
-	$(FREERTOS_DIR)/stream_buffer.c \
-	$(FREERTOS_DIR)/tasks.c \
-	$(FREERTOS_DIR)/timers.c \
-	$(FREERTOS_DIR)/portable/MemMang/heap_4.c \
-	$(FREERTOS_DIR)/portable/GCC/ARM_CM7/r0p1/port.c \
-	$(DAISYSP_DIR)/Source/Effects/chorus.cpp
+# VPATH to help match nested sources
+VPATH = $(sort $(dir $(APP_SRC)))
+
+# Source Files (use wildcard to recursively grab all needed files)
+APP_SRC := \
+	$(wildcard $(SRC_DIR)/*.cpp) \
+	$(wildcard $(SRC_DIR)/*.c) \
+	$(wildcard $(FREERTOS_DIR)/*.c) \
+	$(wildcard $(FREERTOS_DIR)/portable/MemMang/*.c) \
+	$(wildcard $(FREERTOS_DIR)/portable/GCC/ARM_CM7/r0p1/*.c) \
+	$(wildcard $(DAISYSP_DIR)/Source/**/*.cpp) \
+	$(wildcard $(LIBDAISY_DIR)/src/**/*.c) \
+	$(wildcard $(LIBDAISY_DIR)/src/**/*.cpp) \
+	$(wildcard $(LIBDAISY_DIR)/Middlewares/**/*.c) \
+	$(wildcard $(LIBDAISY_DIR)/Middlewares/**/*.cpp) \
+	$(LIBDAISY_DIR)/core/startup_stm32h750xx.c
 
 # Include Paths
+# Patched USB Device Library headers are added first so that definitions for USBD_MODE_MIDI (and others) are used.
 C_INCLUDES = \
 	-I$(FREERTOS_DIR)/include \
 	-I$(FREERTOS_DIR)/portable/GCC/ARM_CM7/r0p1 \
@@ -37,14 +40,24 @@ C_INCLUDES = \
 	-I$(DAISYSP_DIR)/Source/PhysicalModeling \
 	-I$(DAISYSP_DIR)/Source/Noise \
 	-I$(DAISYSP_DIR)/Source/Control \
+	-I$(LIBDAISY_DIR)/Middlewares/Patched/ST/STM32_USB_Device_Library/Class/CDC/Inc \
 	-I$(LIBDAISY_DIR)/src \
 	-I$(LIBDAISY_DIR)/src/sys \
 	-I$(LIBDAISY_DIR)/src/usbh \
+	-I$(LIBDAISY_DIR)/src/usbd \
+	-I$(LIBDAISY_DIR)/src/util \
 	-I$(LIBDAISY_DIR)/Drivers/STM32H7xx_HAL_Driver/Inc \
 	-I$(LIBDAISY_DIR)/Drivers/CMSIS-Device/ST/STM32H7xx/Include \
 	-I$(LIBDAISY_DIR)/Drivers/CMSIS_5/CMSIS/Core/Include \
 	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Host_Library/Core/Inc \
-	-I$(LIBDAISY_DIR)/Middlewares/Third_Party/FatFs/src
+	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Host_Library/Class/MSC/Inc \
+	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Host_Library/Class/MIDI/Inc \
+	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Device_Library/Core/Inc \
+	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Inc \
+	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Device_Library/Class/CDC/Src \
+	-I$(LIBDAISY_DIR)/Middlewares/ST/STM32_USB_Device_Library/Core/Src \
+	-I$(LIBDAISY_DIR)/Middlewares/Third_Party/FatFs/src \
+	-I$(LIBDAISY_DIR)/core
 
 # Compiler settings
 PREFIX = arm-none-eabi-
@@ -57,22 +70,19 @@ CFLAGS = -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard \
 	-Wall -O2 -fdata-sections -ffunction-sections $(C_INCLUDES)
 CPPFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++14
 
-# Object Files (split by extension)
-C_SRCS   := $(filter %.c, $(APP_SRC))
-CPP_SRCS := $(filter %.cpp, $(APP_SRC))
-
-OBJECTS = $(addprefix $(BUILD_DIR)/, $(C_SRCS:.c=.o)) \
-		  $(addprefix $(BUILD_DIR)/, $(CPP_SRCS:.cpp=.o))
+# Generate list of object files
+OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(filter %.c,$(APP_SRC))) \
+          $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(filter %.cpp,$(APP_SRC)))
 
 # Build Rules
-all: $(BUILD_DIR)/$(TARGET).a
+all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).bin
 
 $(BUILD_DIR)/%.o: %.c
-	mkdir -p $(dir $@)
+	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/%.o: %.cpp
-	mkdir -p $(dir $@)
+	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/$(TARGET).a: $(OBJECTS)
@@ -81,18 +91,16 @@ $(BUILD_DIR)/$(TARGET).a: $(OBJECTS)
 LD = $(PREFIX)gcc
 OBJCOPY = $(PREFIX)objcopy
 
-# Linker script (change path if needed)
+# Linker script
 LD_SCRIPT = $(LIBDAISY_DIR)/core/STM32H750IB_flash.lds
 
-LDFLAGS = -T$(LD_SCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
+LDFLAGS = -T$(LD_SCRIPT) -L$(LIBDAISY_DIR)/build -L$(DAISYSP_DIR)/build \
+	-Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(TARGET).map
 
-BIN_FILE = $(BUILD_DIR)/$(TARGET).bin
-
-# Add to the build rules
-all: $(BUILD_DIR)/$(TARGET).bin
+LDLIBS = -ldaisy -ldaisysp -lm -lc -lnosys
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
-	$(LD) $(CPPFLAGS) $(OBJECTS) -o $@ $(LDFLAGS)
+	$(LD) $(CPPFLAGS) $(OBJECTS) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
 	$(OBJCOPY) -O binary $< $@
